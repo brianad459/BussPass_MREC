@@ -11,7 +11,7 @@ from trafficAPI import get_route_info, get_traffic_incidents, get_traffic_info_c
 import testing
 import Speaker
 from image_animation import *
-
+import math
 # Load YOLOv11 model
 model = YOLO("Mediapipe_test/yolo11n.pt")
 
@@ -70,6 +70,40 @@ last_detected_gesture = ""
 last_confidence = 0
 restart_message_start_time = None
 message_duration = 10  # seconds
+frame_count = 0
+
+
+
+
+# Load sprite once at the top (if not already loaded)
+sprite = cv2.imread(r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject\images\gameFist-removebg-preview.png", cv2.IMREAD_UNCHANGED)
+sprite_h, sprite_w = sprite.shape[:2]
+
+def overlay_sprite(frame, x, y, scale=1.0):
+    global sprite, sprite_h, sprite_w
+    if sprite is None:
+        return frame
+    resized_sprite = cv2.resize(sprite, (int(sprite_w * scale), int(sprite_h * scale)))
+    h, w = resized_sprite.shape[:2]
+    frame_h, frame_w = frame.shape[:2]
+    if y + h > frame_h or x + w > frame_w or x < 0 or y < 0:
+        return frame
+    if resized_sprite.shape[2] == 4:
+        overlay = resized_sprite[:, :, :3]
+        alpha = resized_sprite[:, :, 3] / 255.0
+        roi = frame[y:y + h, x:x + w]
+        for c in range(3):
+            roi[:, :, c] = (alpha * overlay[:, :, c] + (1 - alpha) * roi[:, :, c])
+        frame[y:y + h, x:x + w] = roi
+    else:
+        frame[y:y + h, x:x + w] = resized_sprite[:, :, :3]
+    return frame
+
+def get_pulse_scale(frame_count, base_scale=1.0, pulse_amplitude=0.5, pulse_speed=0.05):
+    return base_scale + pulse_amplitude * math.sin(frame_count * pulse_speed)
+
+
+
 
 # I want to say if the person at that ID is playing the game the have player on their head
 def currentPLayer(person_id, game_started, annotated_frame, target_id):
@@ -146,28 +180,6 @@ def instructions(frame):
         cv2.putText(frame, line, (x, y), font, font_scale, font_color, thickness)
 
     # === 2. Overlay Static Sprite ===
-    sprite_path = r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject\images\gameFist-removebg-preview.png"
-    sprite = cv2.imread(sprite_path, cv2.IMREAD_UNCHANGED)
-
-    if sprite is not None and sprite.shape[2] == 4:
-        # Resize to fit space under text
-        sprite = cv2.resize(sprite, (120, 120))
-        h, w = sprite.shape[:2]
-        x_sprite = 30
-        y_sprite = y_start + len(Instruction_text) * line_height + 20
-
-        # Alpha blending
-        bgr = sprite[:, :, :3]
-        alpha = sprite[:, :, 3] / 255.0
-
-        # Overlay on frame
-        if y_sprite + h <= frame.shape[0] and x_sprite + w <= frame.shape[1]:
-            roi = frame[y_sprite:y_sprite + h, x_sprite:x_sprite + w]
-            for c in range(3):
-                roi[:, :, c] = (1 - alpha) * roi[:, :, c] + alpha * bgr[:, :, c]
-            frame[y_sprite:y_sprite + h, x_sprite:x_sprite + w] = roi
-    else:
-        print("⚠️ Sprite not loaded or missing alpha channel!")
 
     # === 3. Speak Instructions Once ===
     if not instructions_spoken:
@@ -358,6 +370,15 @@ while True:
         cv2.putText(annotated_frame, "Let's Play Rock, Paper, Scissors!", (20, 160), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 128, 255), 2)
         cv2.putText(annotated_frame, "Gesture 'Game' in ASL to start playing!", (20, 200), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 128, 255), 2)
         instructions(annotated_frame)
+        # --- Pulsing Sprite Animation under Instructions ---
+        if sprite is not None:
+            # Calculate pulsing scale
+            scale = get_pulse_scale(frame_count)
+            # Position: x=30 (left), y=after instructions (e.g., 370)
+            x_sprite = 30
+            y_sprite = 370
+            annotated_frame = overlay_sprite(annotated_frame, x_sprite, y_sprite, scale)
+        frame_count += 1
 
     #text_info = get_traffic_info_combined()
     #draw_multiline_text_right_aligned(annotated_frame, text_info)
