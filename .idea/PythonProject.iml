@@ -2,13 +2,15 @@
 <module type="PYTHON_MODULE" version="4">
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/Mediapipe_test" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.10" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.9" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="module" module-name="PythonProject1" />
-    <orderEntry type="module" module-name="mediapipe" />
+    <orderEntry type="module" module-name="nothing" />
     <orderEntry type="module" module-name="hand-gesture-recognition-mediapipe" />
     <orderEntry type="module" module-name="mediapipe2" />
+    <orderEntry type="module" module-name="ByteTrack" />
   </component>
 </module>

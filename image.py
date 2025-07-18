@@ -1,10 +1,7 @@
-import numpy as np
-
 import cv2
 import os
 import kagglehub
 import matplotlib.pyplot as plt
-import mediapipe as mp
 
 dataset_path = kagglehub.dataset_download("deeppythonist/american-sign-language-dataset")
 print(f"Dataset downloaded to: {dataset_path}")
