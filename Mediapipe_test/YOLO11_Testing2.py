@@ -344,7 +344,8 @@ while True:
     results = model.track(source=frame, persist=True)[0]
     person_boxes = results.boxes[results.boxes.cls == 0]
     results.boxes = results.boxes[:0]
-    annotated_frame = results.plot()
+    annotated_frame = frame.copy()
+    results.plot(annotated_frame)
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     result = hands.process(rgb_frame)
 
