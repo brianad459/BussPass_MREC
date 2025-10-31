@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project version="4">
-  <component name="SqlDialectMappings">
-    <file url="file://$PROJECT_DIR$/graphhopper/core/files/postgis/gh_from_a_to_b_local.sql" dialect="GenericSQL" />
-  </component>
-</project>

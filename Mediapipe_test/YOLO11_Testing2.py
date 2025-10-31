@@ -16,7 +16,9 @@ import math
 model = YOLO("Mediapipe_test/yolo11n.pt")
 
 # Load TFLite model
-interpreter = tf.lite.Interpreter(model_path="../gesture_model_new.tflite")
+interpreter = tf.lite.Interpreter(
+    model_path=r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\gesture_model_new.tflite"
+)
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
@@ -25,8 +27,7 @@ output_details = interpreter.get_output_details()
 import joblib  # Add to the top of the file with other imports
 
 # Load LabelEncoder to get consistent label order
-encoder = joblib.load("gesture_label_encoder.pkl")
-gesture_labels = list(encoder.classes_)  # Dynamically load labels
+
 
 
 # MediaPipe Hands
@@ -48,8 +49,8 @@ count = 0
 countdown_index = 0
 countdown_start_time = None
 show_countdown = False
-startGame = ["ROCK", "PAPER", "SCISSORS", "ON", "GO"]
-GameList = ["paper", "rock", "scissor"]
+startGame = ["ROCK", "PAPER", "SCISSOR", "ON", "GO"]
+GameList = ["paper", "rock", "scissor", "game"]
 ready_for_round = False
 user_move = None
 
@@ -71,16 +72,80 @@ last_confidence = 0
 restart_message_start_time = None
 message_duration = 10  # seconds
 frame_count = 0
+gesture_labels = ["paper", "rock", "scissor", "game"]
+
+import joblib
+encoder = joblib.load(r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\gesture_label_encoder.pkl")
+gesture_labels = list(encoder.classes_)
+print("Loaded gesture labels:", gesture_labels)
+print("Model/encoder class order:", list(encoder.classes_))
+scaler = joblib.load(r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\gesture_input_scaler.pkl")
+
+# === ICONS ===
+ICON_SIZE = 72
+ICON_GAP = 12
+
+def load_rgba(path):
+    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        print(f"[WARN] Icon not found: {path}")
+        return None
+    return img
+
+sprite = cv2.imread(r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\images\gameFist-removebg-preview.png", cv2.IMREAD_UNCHANGED)
+icon_paths = {
+    "rock":    r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\images\rock.png",
+    "paper":   r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\images\gameFist-removebg-preview.png",
+    "scissor": r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\images\scissor.png",  # singular to match logic
+}
+icons = {name: load_rgba(path) for name, path in icon_paths.items()}
 
 
 
+if sprite is not None:
+    sprite_h, sprite_w = sprite.shape[:2]
+else:
+    sprite_h = sprite_w = 0
 
-# Load sprite once at the top (if not already loaded)
-sprite = cv2.imread(r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject\images\gameFist-removebg-preview.png", cv2.IMREAD_UNCHANGED)
-sprite_h, sprite_w = sprite.shape[:2]
+
+
+def overlay_rgba(frame, img_rgba, x, y, scale=1.0):
+    if img_rgba is None:
+        return
+    new_w = max(1, int(img_rgba.shape[1] * scale))
+    new_h = max(1, int(img_rgba.shape[0] * scale))
+    icon = cv2.resize(img_rgba, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    h, w = icon.shape[:2]
+    H, W = frame.shape[:2]
+    x = min(max(0, x), W - w)
+    y = min(max(0, y), H - h)
+    if icon.shape[2] == 4:
+        alpha = icon[:, :, 3] / 255.0
+        rgb = icon[:, :, :3]
+        roi = frame[y:y+h, x:x+w]
+        for c in range(3):
+            roi[:, :, c] = (alpha * rgb[:, :, c] + (1 - alpha) * roi[:, :, c])
+        frame[y:y+h, x:x+w] = roi
+    else:
+        frame[y:y+h, x:x+w] = icon[:, :, :3]
+
+def draw_gesture_icons(frame, selected=None):
+    order = ["rock", "paper", "scissor"]
+    H, W = frame.shape[:2]
+    x, y = W - ICON_SIZE - 20, 20
+    for name in order:
+        icon = icons.get(name)
+        if icon is not None:
+            scale = ICON_SIZE / max(1, icon.shape[0])
+            overlay_rgba(frame, icon, x, y, scale=scale)
+            if selected and selected.lower() == name:
+                cv2.rectangle(frame, (x-4, y-4),
+                              (x + int(icon.shape[1]*scale) + 4, y + int(icon.shape[0]*scale) + 4),
+                              (0, 255, 0), 2)
+        y += ICON_SIZE + ICON_GAP
+
 
 def overlay_sprite(frame, x, y, scale=1.0):
-    global sprite, sprite_h, sprite_w
     if sprite is None:
         return frame
     resized_sprite = cv2.resize(sprite, (int(sprite_w * scale), int(sprite_h * scale)))
@@ -103,8 +168,12 @@ def get_pulse_scale(frame_count, base_scale=1.0, pulse_amplitude=0.5, pulse_spee
     return base_scale + pulse_amplitude * math.sin(frame_count * pulse_speed)
 
 
-
-
+def load_images(path):
+    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        print("Image loading failed")
+        return None
+    return img
 # I want to say if the person at that ID is playing the game the have player on their head
 def currentPLayer(person_id, game_started, annotated_frame, target_id):
     if person_id and not None and game_started:
@@ -194,7 +263,7 @@ def instructions(frame):
 def restartGameNoResponse (annotated_frame, user_move):
     last_valid_time = time.time()
     current_time = time.time()
-    if user_move not in ["rock, paper, scissors"] and current_time - last_valid_time > 20:
+    if user_move not in ["rock, paper, scissor"] and current_time - last_valid_time > 20:
         countdown(startGame, frame)
 
 
@@ -286,8 +355,8 @@ def playingGameLogic(user_movement, computer_movement, annotated_frame):
     if user_movement == computer_movement:
         result_text = "It's a tie!"
     elif (
-        (user_movement == "rock" and computer_movement == "scissors") or
-        (user_movement == "scissors" and computer_movement == "paper") or
+        (user_movement == "rock" and computer_movement == "scissor") or
+        (user_movement == "scissor" and computer_movement == "paper") or
         (user_movement == "paper" and computer_movement == "rock")
     ):
         result_text = "User Wins!"
@@ -352,21 +421,28 @@ while True:
     success, frame = cap.read()
     if not success:
         break
+
     frame = cv2.flip(frame, 1)
+
+    # 1) YOLO
     results = model.track(source=frame, persist=True)[0]
+
+    # 2) person boxes (before any edits)
     person_boxes = results.boxes[results.boxes.cls == 0]
-    results.boxes = results.boxes[:0]
-    annotated_frame = frame.copy()
-    results.plot(annotated_frame)
+
+    # 3) base image to draw on
+    base = results.plot()
+    annotated_frame = base.copy()
+
+    # 4) MediaPipe on the raw camera frame
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     result = hands.process(rgb_frame)
-
 
     if rounds == 3 and not who_won_called:
         whoWon(user_wins, computer_wins, annotated_frame)
         who_won_called = True
 
-    if not game_started and not instructions_spoken:
+    if not game_started:
         cv2.putText(annotated_frame, "Let's Play Rock, Paper, Scissors!", (20, 160), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 128, 255), 2)
         cv2.putText(annotated_frame, "Gesture 'Game' in ASL to start playing!", (20, 200), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 128, 255), 2)
         instructions(annotated_frame)
@@ -387,8 +463,9 @@ while True:
         for hand_landmarks in result.multi_hand_landmarks:
             mp_drawing.draw_landmarks(annotated_frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
             landmark_list = [coord for lm in hand_landmarks.landmark for coord in (lm.x, lm.y, lm.z)]
-            input_data = np.array([landmark_list], dtype=np.float32)
-            interpreter.set_tensor(input_details[0]['index'], input_data)
+            x = np.array([landmark_list], dtype=np.float32)
+            x = scaler.transform(x).astype(np.float32)  # <<< crucial
+            interpreter.set_tensor(input_details[0]['index'], x)
             interpreter.invoke()
             predictions = interpreter.get_tensor(output_details[0]['index'])
             predicted_label = np.argmax(predictions)
@@ -396,6 +473,23 @@ while True:
             confidence = predictions[0][predicted_label]
             last_confidence =  confidence
             last_detected_gesture = gesture_name  # Track it globally
+
+            # --- GAME start trigger smoothing ---
+            GAME_THRESH = 0.75
+            try:
+                stable_game_frames
+            except NameError:
+                stable_game_frames = 0
+
+            if (gesture_name == "game") and (confidence > GAME_THRESH) and not game_started:
+                stable_game_frames += 1
+            else:
+                stable_game_frames = 0
+
+            if stable_game_frames >= 4 and not game_started:
+                game_started = True
+                show_countdown = True
+                countdown_start_time = None
 
             if rounds >= 3:
                 if gesture_name == "game" and confidence > 0.85:
@@ -457,8 +551,7 @@ while True:
             locals().get('gesture_name', ''),
             locals().get('confidence', 0.0)
         )
-    results.boxes = results.boxes[:0] # This doesn't include any bounding boxes on anything
-    annotated_frame = results.plot()
+
 
 
     if game_started:
@@ -504,6 +597,12 @@ while True:
 
     gameInvitation( locals().get('person_id', 0), locals().get('gesture_name', ''), locals().get('confidence', 0.0))
 
+    selected_for_ui = None
+    if last_confidence >= 0.75 and last_detected_gesture in ("rock", "paper", "scissor"):
+        selected_for_ui = last_detected_gesture
+
+    # Draw the three icons in the top-right
+    draw_gesture_icons(annotated_frame, selected=selected_for_ui)
 
 
     cv2.putText(annotated_frame, f"Count: {count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)

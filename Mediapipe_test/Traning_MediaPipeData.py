@@ -1,104 +1,129 @@
 import os
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-import h5py
 import joblib
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, classification_report
 import matplotlib.pyplot as plt
 
-# TensorFlow version
 print("TensorFlow version:", tf.__version__)
 
-# === Load and Merge CSVs ===
-true_labels_file = "gesture_data_with_true_labels.csv"
-main_file = "gesture_data_new.csv"
+# ---------------- Paths ----------------
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+MAIN_CSV      = SCRIPT_DIR / "gesture_data_new.csv"
+ENCODER_PATH  = PROJECT_ROOT / "gesture_label_encoder.pkl"
+SCALER_PATH   = PROJECT_ROOT / "gesture_input_scaler.pkl"        # NEW: save scaler for inference
+TFLITE_PATH   = PROJECT_ROOT / "gesture_model_new.tflite"
+H5_PATH       = PROJECT_ROOT / "gesture_model.h5"
+PRED_CSV_PATH = SCRIPT_DIR / "gesture_data_with_confidence.csv"
 
-df_true = pd.read_csv(true_labels_file)
-df_main = pd.read_csv(main_file)
+# ---------------- Load CSV ----------------
+if not MAIN_CSV.exists():
+    raise FileNotFoundError(f"Could not find CSV: {MAIN_CSV}")
 
-df_combined = pd.concat([df_main, df_true], ignore_index=True)
-df_combined.drop_duplicates(inplace=True)
-df_combined = df_combined[df_combined["label"] != "okay"]  # ✅ Remove "okay"
-df_combined = df_combined.sample(frac=1, random_state=42).reset_index(drop=True)
-df_combined.to_csv(main_file, index=False)
-print("✅ Merged and removed 'okay' label.")
+df = pd.read_csv(MAIN_CSV)
+if "label" not in df.columns:
+    raise ValueError("CSV must contain a 'label' column.")
 
-# === Prepare Data ===
-df = df_combined
-landmark_columns = [f"{axis}{i}" for i in range(21) for axis in ["x", "y", "z"]]
-x = df[landmark_columns].astype("float32").values
-y = df['label'].values
+# Drop duplicates, shuffle
+df = df.drop_duplicates().copy()
+df = df.sample(frac=1, random_state=42).reset_index(drop=True)
 
-# Encode Labels
+# KEEP ONLY the 4 classes we want  ------------------------  NEW / CHANGED
+allowed = {"rock", "paper", "scissor", "game"}
+df = df[df["label"].isin(allowed)].copy()
+if df.empty:
+    raise ValueError("After filtering to rock/paper/scissor/game, no rows remained.")
+print("Classes present (post-filter):", sorted(df["label"].unique()))
+
+# ---------------- Prepare Data ----------------
+# Expected landmark columns: x0..x20, y0..y20, z0..z20 (63 total)
+landmark_columns = [f"{axis}{i}" for i in range(21) for axis in ("x", "y", "z")]
+missing = [c for c in landmark_columns if c not in df.columns]
+if missing:
+    raise ValueError(f"Missing expected landmark columns: {missing[:5]}{'...' if len(missing)>5 else ''}")
+
+X = df[landmark_columns].astype("float32").values
+y = df["label"].values
+
+# Encode labels --------------------------------------------------------------- NEW / CHANGED
 encoder = LabelEncoder()
 y_enc = encoder.fit_transform(y)
 num_classes = len(encoder.classes_)
+joblib.dump(encoder, ENCODER_PATH)
+print(f"✅ Saved LabelEncoder → {ENCODER_PATH}")
+print("Label classes (order used by the model):", list(encoder.classes_))
+assert set(encoder.classes_) == allowed, f"Unexpected classes: {encoder.classes_}"
 
-# ✅ Save encoder for reuse in inference
-joblib.dump(encoder, "gesture_label_encoder.pkl")
-print("✅ Saved LabelEncoder as 'gesture_label_encoder.pkl'")
-print("Label classes:", encoder.classes_)  # Debug
+# Feature scaling (per-feature standardization) ------------------------------ NEW / CHANGED
+scaler = StandardScaler()
+X = scaler.fit_transform(X).astype("float32")
+joblib.dump(scaler, SCALER_PATH)
+print(f"✅ Saved StandardScaler → {SCALER_PATH}")
 
-# Normalize input data
-x /= np.max(x)
+# Split
+X_train, X_test, y_train_idx, y_test_idx = train_test_split(
+    X, y_enc, test_size=0.2, random_state=42, stratify=y_enc
+)
 
-# Train/test split
-x_train, x_test, y_train, y_test = train_test_split(x, y_enc, test_size=0.2, random_state=42)
+# One-hot
+y_train = tf.keras.utils.to_categorical(y_train_idx, num_classes)
+y_test  = tf.keras.utils.to_categorical(y_test_idx,  num_classes)
 
-# One-hot encode
-y_train = tf.keras.utils.to_categorical(y_train, num_classes)
-y_test = tf.keras.utils.to_categorical(y_test, num_classes)
-
-# === Build Model ===
+# ---------------- Build Model ----------------
 model = tf.keras.Sequential([
-    tf.keras.layers.Input(shape=(x.shape[1],)),
+    tf.keras.layers.Input(shape=(X.shape[1],)),   # 63 features
+    tf.keras.layers.Dense(256, activation='relu'),
+    tf.keras.layers.Dropout(0.2),
     tf.keras.layers.Dense(128, activation='relu'),
-    tf.keras.layers.Dense(64, activation='relu'),
-    tf.keras.layers.Dense(num_classes, activation='softmax')
+    tf.keras.layers.Dropout(0.2),
+    tf.keras.layers.Dense(num_classes, activation='softmax'),
 ])
 
-# Compile and Train
 model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-model.fit(x_train, y_train, epochs=20, validation_data=(x_test, y_test))
+history = model.fit(X_train, y_train, epochs=20, validation_data=(X_test, y_test), batch_size=64)
 
-# Evaluate
-model.evaluate(x_test, y_test)
+# ---------------- Evaluate ----------------
+loss, acc = model.evaluate(X_test, y_test, verbose=0)
+print(f"✅ Test accuracy: {acc:.4f}")
 
-# === Add Predictions to CSV ===
-full_probs = model.predict(x)
-predicted_indices = np.argmax(full_probs, axis=1)
-confidences = np.max(full_probs, axis=1)
-predicted_labels = encoder.inverse_transform(predicted_indices)
+# Classification report
+y_pred_probs = model.predict(X_test, verbose=0)
+y_pred_idx = np.argmax(y_pred_probs, axis=1)
+print("\nClassification report:\n",
+      classification_report(y_test_idx, y_pred_idx, target_names=encoder.classes_))
 
-df['predicted_label'] = predicted_labels
-df['confidence'] = confidences
-df.to_csv("gesture_data_with_confidence.csv", index=False)
-print("✅ CSV with predictions + confidence saved.")
-
-# Save model
-model.save("gesture_model.h5")
-print("✅ Saved model as 'gesture_model.h5'")
-
-# === Confusion Matrix ===
-y_pred_probs = model.predict(x_test)
-y_pred = np.argmax(y_pred_probs, axis=1)
-y_true = np.argmax(y_test, axis=1)
-
-cm = confusion_matrix(y_true, y_pred)
+# Confusion matrix
+cm = confusion_matrix(y_test_idx, y_pred_idx)
 disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=encoder.classes_)
 disp.plot(cmap='Blues', xticks_rotation=45)
 plt.title("Confusion Matrix")
+plt.tight_layout()
 plt.show()
 
-# === TFLite Conversion ===
-TF_LITE_MODEL_FILE_NAME = "../gesture_model_new.tflite"
+# ---------------- Add predictions to CSV (full data) ----------------
+full_probs = model.predict(X, verbose=0)
+full_pred_idx = np.argmax(full_probs, axis=1)
+confidences = np.max(full_probs, axis=1)
+predicted_labels = encoder.inverse_transform(full_pred_idx)
+
+df_out = df.copy()
+df_out["predicted_label"] = predicted_labels
+df_out["confidence"] = confidences
+df_out.to_csv(PRED_CSV_PATH, index=False)
+print(f"✅ CSV with predictions + confidence → {PRED_CSV_PATH}")
+
+# ---------------- Save models ----------------
+model.save(H5_PATH)
+print(f"✅ Saved Keras model → {H5_PATH}")
+
+# Convert to TFLite
 converter = tf.lite.TFLiteConverter.from_keras_model(model)
 tflite_model = converter.convert()
-
-with open(TF_LITE_MODEL_FILE_NAME, "wb") as f:
+with open(TFLITE_PATH, "wb") as f:
     f.write(tflite_model)
-print(f"✅ Saved TFLite model: {TF_LITE_MODEL_FILE_NAME} ({round(os.path.getsize(TF_LITE_MODEL_FILE_NAME)/1024, 2)} KB)")
-print("✅ Model training and TFLite conversion complete.")
+print(f"✅ Saved TFLite model → {TFLITE_PATH} ({round(TFLITE_PATH.stat().st_size/1024, 2)} KB)")
