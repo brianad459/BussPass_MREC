@@ -7,6 +7,7 @@ import numpy as np
 import tensorflow as tf
 import time
 import random
+from Sound_Effects import SoundEffects
 from trafficAPI import get_route_info, get_traffic_incidents, get_traffic_info_combined
 import testing
 import Speaker
@@ -14,6 +15,8 @@ from image_animation import *
 import math
 # Load YOLOv11 model
 model = YOLO("Mediapipe_test/yolo11n.pt")
+
+#Kaggle dataset: https://www.kaggle.com/datasets/sanikamal/rock-paper-scissors-dataset
 
 # Load TFLite model
 interpreter = tf.lite.Interpreter(
@@ -73,6 +76,11 @@ restart_message_start_time = None
 message_duration = 10  # seconds
 frame_count = 0
 gesture_labels = ["paper", "rock", "scissor", "game"]
+show_throw_text_once = True
+first_round_rps_detected = False   # has a rock/paper/scissor been seen in round 1 yet?
+hold_gesture = None
+hold_start_time = None
+HOLD_DURATION = 3.0  # seconds the gesture must stay the same
 
 import joblib
 encoder = joblib.load(r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\gesture_label_encoder.pkl")
@@ -94,9 +102,9 @@ def load_rgba(path):
 
 sprite = cv2.imread(r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\images\gameFist-removebg-preview.png", cv2.IMREAD_UNCHANGED)
 icon_paths = {
-    "rock":    r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\images\rock.png",
-    "paper":   r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\images\gameFist-removebg-preview.png",
-    "scissor": r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\images\scissor.png",  # singular to match logic
+    "rock":    r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\images\rock-removebg-preview.png",
+    "paper":   r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\images\paper-removebg-preview.png",
+    "scissor": r"C:\Users\fau_bdeloatch\PycharmProjects\PythonProject1\images\scissor-removebg-preview.png",  # singular to match logic
 }
 icons = {name: load_rgba(path) for name, path in icon_paths.items()}
 
@@ -273,15 +281,15 @@ def whoWon(user_wins, computer_wins, frame):
     height = frame.shape[0]
     if user_wins > computer_wins:
         msg = "User Won the Game!"
-        Speaker.computerLost1("You can have that one")
         color = (0, 255, 0)
+        SoundEffects.win()
     elif computer_wins > user_wins:
         msg = "Computer Won the Game!"
-        Speaker.UserLost1("Haha You lost to AI")
+        SoundEffects.lose()
         color = (0, 0, 255)
     else:
         msg = "It's a Tie, that's Game!"
-        Speaker.tie("ggs")
+        SoundEffects.tie()
         color = (255, 255, 0)
     cv2.putText(result_frame, msg, (20, height - 100), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 2)
     end_time = time.time() + 2
@@ -314,17 +322,6 @@ def playingGestures(frame, GameList, user_move):
 
         display_frame = frame.copy()
 
-        # Display user’s move
-        cv2.putText(display_frame, f"Your Move: {user_move}", (20, 100),
-                    font, 1.5, (0, 255, 0), 3)
-
-        # Prompt user
-        cv2.putText(display_frame, "Throw up your next gesture!",
-                    (10, height - 150), font, 0.9, (0, 255, 255), 2)
-
-        # Show computer move changing
-        cv2.putText(display_frame, f"Computer picked: {final_choice}",
-                    (10, height - 100), font, font_scale, (0, 0, 255), thickness)
 
         cv2.imshow("YOLO + Gesture Recognition", display_frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -335,6 +332,7 @@ def playingGestures(frame, GameList, user_move):
                 font, 1.5, (0, 255, 0), 3)
     cv2.putText(display_frame, f"Computer picked: {final_choice}",
                 (10, height - 100), font, font_scale, (0, 0, 255), thickness)
+
     end_time = time.time() + 2
     while time.time() < end_time:
         cv2.imshow("YOLO + Gesture Recognition", display_frame)
@@ -347,11 +345,13 @@ def playingGestures(frame, GameList, user_move):
 
 def playingGameLogic(user_movement, computer_movement, annotated_frame):
     global user_wins, computer_wins, rounds
+
     display_frame2 = annotated_frame.copy()
     user_movement = user_movement.strip().lower()
     computer_movement = computer_movement.strip().lower()
-    height, _, _ = annotated_frame.shape
+    height, width, _ = annotated_frame.shape  # get width too
 
+    # -------- Decide result --------
     if user_movement == computer_movement:
         result_text = "It's a tie!"
     elif (
@@ -359,28 +359,57 @@ def playingGameLogic(user_movement, computer_movement, annotated_frame):
         (user_movement == "scissor" and computer_movement == "paper") or
         (user_movement == "paper" and computer_movement == "rock")
     ):
-        result_text = "User Wins!"
+        result_text = "You Win!"
         user_wins += 1
     else:
-        result_text = "Computer Wins!"
+        result_text = "Salee Wins!"
         computer_wins += 1
 
-    y_position = height - 30
+    # -------- Centered positions --------
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    result_scale = 1.2
+    result_thickness = 2
 
-    cv2.putText(display_frame2, result_text, (20, height),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2)
-    cv2.putText(display_frame2, f"User points: {user_wins}", (20, height - 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2)
-    cv2.putText(display_frame2, f"Computer points: {computer_wins}", (20, height - 70),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2)
+    # main result text (center of screen)
+    (text_w, text_h), _ = cv2.getTextSize(result_text, font, result_scale, result_thickness)
+    text_x = (width - text_w) // 2
+    text_y = height // 2
+
+    # score text a bit below the result
+    score_text = f"Score: Your Points {user_wins} | Salee Points {computer_wins}"
+    score_scale = 1
+    score_thickness = 2
+    (score_w, score_h), _ = cv2.getTextSize(score_text, font, score_scale, score_thickness)
+    score_x = (width - score_w) // 2
+    score_y = text_y + 50
+
+    # -------- Draw text --------
+    color = (255, 255, 0)  # you can change per result if you want
+
+    cv2.putText(display_frame2, result_text, (text_x, text_y),
+                font, result_scale, color, result_thickness)
+
+    cv2.putText(display_frame2, score_text, (score_x, score_y),
+                font, score_scale, color, score_thickness)
+
+    # -------- Play sound (from other file) --------
+    if result_text == "You Win!":
+        SoundEffects.points()     # uses your Sound_Effects file
+    elif result_text == "Salee Wins!":
+        SoundEffects.points()
+    else:
+        # no sound on tie, or add SoundEffects.points() if you want
+        pass
 
     rounds += 1
 
+    # -------- Show this frame for 2 seconds --------
     end_time = time.time() + 2
     while time.time() < end_time:
         cv2.imshow("YOLO + Gesture Recognition", display_frame2)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
+
 def test_window():
     start = time.time()
     while time.time() - start < 5:
@@ -391,25 +420,38 @@ def test_window():
             break
 
 def countdown(startGame, frame):
-    global countdown_index, countdown_start_time, show_countdown, ready_for_round, round_start_time
+    global countdown_index, countdown_start_time, show_countdown
+    global ready_for_round, round_start_time
+    global waiting_for_first_round_gesture, first_round_gesture_locked
+
     if countdown_start_time is None:
         countdown_start_time = time.time()
+
     current_time = time.time()
     elapsed = current_time - countdown_start_time
+
     if countdown_index < len(startGame):
         if elapsed > countdown_index:
             word = startGame[countdown_index]
             height = frame.shape[0]
             display = frame.copy()
-            cv2.putText(display, word, (100, int(height / 2)), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 40, 36), 4)
+            cv2.putText(display, word, (100, int(height / 2)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 40, 36), 4)
             cv2.imshow("YOLO + Gesture Recognition", display)
             countdown_index += 1
     else:
+        # Countdown finished -> now we’re ready for the first gesture
         show_countdown = False
         countdown_index = 0
         countdown_start_time = None
         ready_for_round = True
         round_start_time = time.time()
+
+        # Countdown finished: now we’re waiting for the *first* gesture of round 1
+
+        # enable the one-time prompt for the first round
+        show_throw_text_once = True
+
 def playAgain(user_movement, computer_movement, annotated_frame, rounds):
     global user_wins, computer_wins
     if rounds > 4:
@@ -431,8 +473,8 @@ while True:
     person_boxes = results.boxes[results.boxes.cls == 0]
 
     # 3) base image to draw on
-    base = results.plot()
-    annotated_frame = base.copy()
+    annotated_frame = frame.copy()
+
 
     # 4) MediaPipe on the raw camera frame
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -441,6 +483,7 @@ while True:
     if rounds == 3 and not who_won_called:
         whoWon(user_wins, computer_wins, annotated_frame)
         who_won_called = True
+
 
     if not game_started:
         cv2.putText(annotated_frame, "Let's Play Rock, Paper, Scissors!", (20, 160), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 128, 255), 2)
@@ -499,10 +542,14 @@ while True:
                     user_wins = 0
                     computer_wins = 0
                     rounds = 0
+                    counting_gestures = 0
+                    show_throw_text_once = True
                     who_won_called = False
                     testing.get_traffic_incidents()
                     show_game_restart_message = False
                     message_display_start = None
+                    first_round_rps_detected = False
+
                 else:
                     if not show_game_restart_message:
                        show_game_restart_message = True
@@ -520,17 +567,43 @@ while True:
                 show_countdown = True
                 continue
 
+
+
             elif game_started and not show_countdown and not ready_for_round:
                 if confidence > 0.85 and gesture_name in ["paper", "rock", "scissor"]:
-                    user_move = gesture_name.capitalize()
-                    ready_for_round = True
-                    continue
+                    # If we just switched to a new gesture, start timing it
+                    if hold_gesture != gesture_name:
+                        hold_gesture = gesture_name
+                        hold_start_time = time.time()
+                    else:
+                        # Same gesture as last frame: check how long it's been held
+                        if hold_start_time is not None and (time.time() - hold_start_time) >= HOLD_DURATION:
+                            # Lock in this gesture as the user's move
+                            user_move = gesture_name.capitalize()
+                            if rounds == 0:
+                                first_round_rps_detected = True
+                            ready_for_round = True
+                            # Reset the hold so next round can work
+                            hold_gesture = None
+                            hold_start_time = None
+                            continue
+                else:
+                    # Gesture disappeared or confidence too low -> reset the hold
+                    hold_gesture = None
+                    hold_start_time = None
+
+
 
             elif ready_for_round:
                 if confidence > 0.85 and gesture_name in ["paper", "rock", "scissor"]:
                     user_move = gesture_name.capitalize()
                     last_move_time = time.time()
                     #test_window()
+                    if rounds == 0:  # only care about the first round
+                        first_round_gesture_locked = True
+                        waiting_for_first_round_gesture = False
+
+                    show_throw_text_once = False
                     computer_move = playingGestures(annotated_frame.copy(), GameList, user_move).capitalize()
                     playingGameLogic(user_move, computer_move, annotated_frame)
                     restartGameNoResponse(annotated_frame, user_move)
@@ -547,6 +620,7 @@ while True:
             seen_ids.add(person_id)
             count += 1
         gameInvitation(
+
             person_id,
             locals().get('gesture_name', ''),
             locals().get('confidence', 0.0)
@@ -602,10 +676,21 @@ while True:
         selected_for_ui = last_detected_gesture
 
     # Draw the three icons in the top-right
-    draw_gesture_icons(annotated_frame, selected=selected_for_ui)
+    if game_started:
+        draw_gesture_icons(annotated_frame, selected=selected_for_ui)
 
+    if game_started and rounds == 0 and not first_round_rps_detected:
+        cv2.putText(
+            annotated_frame,
+            "Throw Your Gesture",
+            (20, 160),
+            cv2.FONT_HERSHEY_COMPLEX,
+            1,
+            (0, 128, 255),
+            2
+        )
 
-    cv2.putText(annotated_frame, f"Count: {count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+    cv2.putText(annotated_frame, f"People: {count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
     cv2.imshow("YOLO + Gesture Recognition", annotated_frame)
     if cv2.waitKey(1) & 0xFF == ord("q"):
         break

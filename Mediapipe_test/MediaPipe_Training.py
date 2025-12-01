@@ -154,4 +154,4 @@ while True:
 
 # cleanup
 cap.release()
-cv2.destroyAllWindows()
+cv2.dpppppppppestroyAllWindows()
